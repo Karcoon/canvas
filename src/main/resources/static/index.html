@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Нарисуй себе на оффер</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.5.0/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        canvas {
+            border: 3px solid black;
+        }
+
+        #tools {
+            margin-bottom: 10px;
+        }
+
+        #clear-btn {
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+<h1>Нарисуй себе на оффер</h1>
+
+<div id="tools">
+    <label for="shape">Выбери фигуру:</label>
+    <select id="shape">
+        <option value="line">Линия</option>
+        <option value="square">Квадрат</option>
+        <option value="diamond">Ромб</option>
+        <option value="arrow">Стрелка</option>
+        <option value="cylinder">Цилиндр</option>
+    </select>
+    <button id="delete-btn">Удалить</button>
+    <button id="clear-btn">Очистить доску</button>
+</div>
+
+<canvas id="board" width="800" height="600"></canvas>
+
+<script type="text/javascript">
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    let stompClient = null;
+    let drawing = false;
+    let moving = false;
+    let startX = 0, startY = 0;
+    let selectedShape = null;
+    let selectedShapeId = null;
+    let shapes = [];
+
+    // Подключение к WebSocket
+    function connect() {
+        const socket = new SockJS('/ws');
+        stompClient = Stomp.over(socket);
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+
+            // Подписываемся на канал получения всех фигур
+            stompClient.subscribe('/topic/canvas', function (message) {
+                shapes = JSON.parse(message.body);
+                redrawCanvas();
+            });
+
+            // Запрашиваем все фигуры при подключении
+            stompClient.send("/app/redraw", {}, null);
+        });
+    }
+
+    // Перерисовка холста
+    function redrawCanvas() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        shapes.forEach(function (shape) {
+            drawShape(shape, shape.id === selectedShapeId);
+        });
+    }
+
+    // Отрисовка фигуры на холсте
+    function drawShape(shape, isSelected) {
+        ctx.strokeStyle = isSelected ? 'red' : shape.color || 'black';
+        ctx.lineWidth = isSelected ? 3 : 2;
+        switch (shape.shape) {
+            case 'line':
+                drawLine(ctx, shape.x, shape.y, shape.x2, shape.y2);
+                break;
+            case 'square':
+                drawSquare(ctx, shape.x, shape.y, shape.x2, shape.y2);
+                break;
+            case 'diamond':
+                drawDiamond(ctx, shape.x, shape.y, shape.x2, shape.y2);
+                break;
+            case 'arrow':
+                drawArrow(ctx, shape.x, shape.y, shape.x2, shape.y2);
+                break;
+            case 'cylinder':
+                drawCylinder(ctx, shape.x, shape.y, shape.x2, shape.y2);
+                break;
+        }
+    }
+
+    function drawLine(ctx, x1, y1, x2, y2) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+    }
+
+    function drawSquare(ctx, x1, y1, x2, y2) {
+        ctx.beginPath();
+        ctx.rect(x1, y1, x2 - x1, y2 - y1);
+        ctx.stroke();
+    }
+
+    function drawDiamond(ctx, x1, y1, x2, y2) {
+        const centerX = (x1 + x2) / 2;
+        const centerY = (y1 + y2) / 2;
+        ctx.beginPath();
+        ctx.moveTo(centerX, y1);
+        ctx.lineTo(x2, centerY);
+        ctx.lineTo(centerX, y2);
+        ctx.lineTo(x1, centerY);
+        ctx.closePath();
+        ctx.stroke();
+    }
+
+    function drawArrow(ctx, x1, y1, x2, y2) {
+        const headLength = 10;
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.lineTo(x2 - headLength * Math.cos(angle - Math.PI / 6), y2 - headLength * Math.sin(angle - Math.PI / 6));
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headLength * Math.cos(angle + Math.PI / 6), y2 - headLength * Math.sin(angle + Math.PI / 6));
+        ctx.stroke();
+    }
+
+    function drawCylinder(ctx, x1, y1, x2, y2) {
+        const width = x2 - x1;
+        const height = y2 - y1;
+        ctx.beginPath();
+        ctx.ellipse(x1 + width / 2, y1, width / 2, height / 4, 0, 0, Math.PI * 2);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1, y2);
+        ctx.moveTo(x2, y1);
+        ctx.lineTo(x2, y2);
+        ctx.ellipse(x1 + width / 2, y2, width / 2, height / 4, 0, 0, Math.PI);
+        ctx.stroke();
+    }
+
+    // Отправка команды рисования
+    function sendDraw(x, y, x2, y2, shape) {
+        stompClient.send("/app/draw", {},
+            stompClient.send("/app/draw", {}, JSON.stringify({
+                x: x,
+                y: y,
+                x2: x2,
+                y2: y2,
+                shape: shape,
+                color: 'black'
+            })));
+    }
+
+    // Отправка команды перемещения
+    function sendMove(x, y, x2, y2, id) {
+        stompClient.send("/app/move", {}, JSON.stringify({
+            x: x,
+            y: y,
+            x2: x2,
+            y2: y2,
+            id: id
+        }));
+    }
+
+    // Отправка команды удаления фигуры
+    function sendDelete(id) {
+        stompClient.send("/app/delete", {}, JSON.stringify({
+            id: id
+        }));
+    }
+
+    // Отправка команды для очистки всей доски
+    function sendClear() {
+        stompClient.send("/app/clear", {}, null);
+    }
+
+    // Проверка, попадает ли точка в фигуру (для выделения и перемещения)
+    function isPointInShape(shape, x, y) {
+        switch (shape.shape) {
+            case 'line':
+                return (Math.abs((shape.y2 - shape.y) * x - (shape.x2 - shape.x) * y + shape.x2 * shape.y - shape.y2 * shape.x) /
+                    Math.sqrt(Math.pow(shape.y2 - shape.y, 2) + Math.pow(shape.x2 - shape.x, 2)) < 5);
+            case 'square':
+            case 'cylinder':
+                return x >= shape.x && x <= shape.x2 && y >= shape.y && y <= shape.y2;
+            case 'diamond':
+                const width = Math.abs(shape.x2 - shape.x) / 2;
+                const height = Math.abs(shape.y2 - shape.y) / 2;
+                const cx = shape.x + width;
+                const cy = shape.y + height;
+                return Math.abs((y - cy) / height + (x - cx) / width) <= 1 && Math.abs((y - cy) / height - (x - cx) / width) <= 1;
+            case 'arrow':
+                return isPointInShape({shape: 'line', x: shape.x, y: shape.y, x2: shape.x2, y2: shape.y2}, x, y);
+        }
+    }
+
+    // Обработка нажатия на холст
+    canvas.addEventListener('mousedown', function (event) {
+        const rect = canvas.getBoundingClientRect();
+        startX = event.clientX - rect.left;
+        startY = event.clientY - rect.top;
+
+        selectedShape = null;
+        selectedShapeId = null;
+        shapes.forEach(function (shape) {
+            if (isPointInShape(shape, startX, startY)) {
+                selectedShape = shape;
+                selectedShapeId = shape.id;
+            }
+        });
+
+        if (selectedShape) {
+            moving = true;
+        } else {
+            drawing = true;
+        }
+    });
+
+    // Обработка перемещения мыши
+    canvas.addEventListener('mousemove', function (event) {
+        const rect = canvas.getBoundingClientRect();
+        const currentX = event.clientX - rect.left;
+        const currentY = event.clientY - rect.top;
+
+        if (drawing) {
+            const shape = document.getElementById('shape').value;
+            redrawCanvas();
+            drawShape({
+                x: startX,
+                y: startY,
+                x2: currentX,
+                y2: currentY,
+                shape: shape,
+                color: 'black'
+            });
+        } else if (moving && selectedShape) {
+            const dx = currentX - startX;
+            const dy = currentY - startY;
+
+            selectedShape.x += dx;
+            selectedShape.y += dy;
+            selectedShape.x2 += dx;
+            selectedShape.y2 += dy;
+
+            startX = currentX;
+            startY = currentY;
+
+            redrawCanvas();
+        }
+    });
+
+    // Обработка отпускания мыши
+    canvas.addEventListener('mouseup', function (event) {
+        if (drawing) {
+            const rect = canvas.getBoundingClientRect();
+            const x2 = event.clientX - rect.left;
+            const y2 = event.clientY - rect.top;
+            const shape = document.getElementById('shape').value;
+            sendDraw(startX, startY, x2, y2, shape);
+            drawing = false;
+        } else if (moving && selectedShape) {
+            sendMove(selectedShape.x, selectedShape.y, selectedShape.x2, selectedShape.y2, selectedShape.id);
+            moving = false;
+        }
+    });
+
+    // Удаление выбранной фигуры
+    document.getElementById('delete-btn').addEventListener('click', function () {
+        if (selectedShapeId) {
+            sendDelete(selectedShapeId);
+            selectedShape = null;
+            selectedShapeId = null;
+        }
+    });
+
+    // Очистка всей доски
+    document.getElementById('clear-btn').addEventListener('click', function () {
+        sendClear();
+    });
+
+    connect();
+</script>
+</body>
+</html>
